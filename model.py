@@ -6,7 +6,8 @@ Created on 19/02/2018
 # model
 
 from keras import backend as K
-from edward.models import Normal
+from edward.models import Normal, Categorical, Mixture
+import tensorflow as tf
 from keras.layers import Input, Dense, Lambda, LSTM, Dropout, Bidirectional, Reshape
 from keras.models import Model
 from recurrentshop import RecurrentModel, LSTMCell
@@ -126,3 +127,39 @@ class Decoder:
         out = self.rnn_2(out)
 
         return Model(inputs = self.input, outputs = out)
+
+
+class MixtureDensityNetwork:
+    """
+    Mixture density network for outputs y on inputs x.
+    p((x,y), (z,theta))
+    = sum_{k=1}^K pi_k(x; theta) Normal(y; mu_k(x; theta), sigma_k(x; theta))
+    where pi, mu, sigma are the output of a neural network taking x
+    as input and with parameters theta. There are no latent variables
+    z, which are hidden variables we aim to be Bayesian about.
+    """
+
+    hidden = Decoder()
+
+    def __init__(self, k):
+        self.K = k  # here K is the amount of Mixtures
+
+    def mapping(self, x):
+        """pi, mu, sigma = NN(x; theta)"""
+        hidden1 = Dense(15, activation='relu')(x)  # fully-connected layer with 15 hidden units
+        hidden2 = Dense(15, activation='relu')(hidden1)
+        self.mus = Dense(self.K)(hidden2)  # the means
+        self.sigmas = Dense(self.K, activation=K.exp)(hidden2)  # the variance
+        self.pi = Dense(self.K, activation=K.softmax)(hidden2)  # the mixture components
+
+    def log_prob(self, xs, zs = None):
+        """log p((xs,ys), (z,theta)) = sum_{n=1}^N log p((xs[n,:],ys[n]), theta)"""
+        # Note there are no parameters we're being Bayesian about. The
+        # parameters are baked into how we specify the neural networks.
+        X, y = xs
+        self.mapping(X)
+        result = tf.exp(Normal.logpdf(y, self.mus, self.sigmas))
+        result = tf.mul(result, self.pi)
+        result = tf.reduce_sum(result, 1)
+        result = tf.log(result)
+        return tf.reduce_sum(result)
