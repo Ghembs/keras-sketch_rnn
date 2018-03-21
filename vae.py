@@ -20,8 +20,8 @@ class Compiler:
 
     def __init__(self, names):
         self.vae = vae.Vae()
-        self.z_mean = self.vae.encoder.mean
-        self.z_log_sigma = self.vae.encoder.log_sigma
+        self.z_mean = self.vae.mean
+        self.z_log_sigma = self.vae.log_sigma
         self.x_train = None
         self.x_valid = None
         self.x_test = None
@@ -77,14 +77,14 @@ class Compiler:
 
     def load_weights(self):
         try:
-            self.vae.model.load_weights("vae_model")
+            self.vae.vae.load_weights("vae_model")
             print("Loaded weights from file")
         except IOError:
             print("Weights not found")
 
     def compile_fit(self):
         # TODO fit the proper loss function
-        self.vae.model.compile(loss = 'categorical_crossentropy', optimizer = 'rmsprop',
+        self.vae.vae.compile(loss = 'categorical_crossentropy', optimizer = 'rmsprop',
                                metrics = ['accuracy'])
 
         self.load_weights()
@@ -94,19 +94,19 @@ class Compiler:
         print(batches.shape[:])
         print(val_batches.shape[:])
 
-        y = np.empty((5000, 128, 5))
-        val_y = np.empty((1000, 128, 5))
+        # y = np.empty((5000, 128, 5))
+        # val_y = np.empty((1000, 128, 5))
 
-        for i in range(5000):
-            y[i] = batches[i][:128]
+        # for i in range(5000):
+        #     y[i] = batches[i][:128]
+        #
+        #     if i < 1000:
+        #         val_y[i] = val_batches[i][:128]
 
-            if i < 1000:
-                val_y[i] = val_batches[i][:128]
-
-        self.vae.model.fit(batches, y, shuffle = False,
+        self.vae.vae.fit(batches, batches, shuffle = False,
                            batch_size = self.batch_size, epochs = self.epochs,
-                           validation_data = (val_batches, val_y))
-        self.vae.model.save_weights("vae_model", True)
+                           validation_data = (val_batches, val_batches))
+        self.vae.vae.save_weights("vae_model", True)
 
 
 def draw(vae):
@@ -114,7 +114,7 @@ def draw(vae):
 
     stroke = np.random.randn(128)
     stroke = stroke.reshape(1, stroke.shape[0])
-    stroke_ = vae.vae.decoder.model.predict(stroke)
+    stroke_ = vae.vae.vae.predict(stroke)
     print(stroke_)
     stroke_ = stroke_.reshape(stroke_.shape[1], stroke_.shape[2])
 
