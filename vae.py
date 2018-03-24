@@ -8,8 +8,73 @@ Created on 20/02/2018
 import numpy as np
 from keras import metrics
 import keras.backend as K
+from keras.layers import subtract, multiply, Reshape
 import dataloader as dl
 import model as vae
+import math
+
+
+def get_mixture_coef(output):
+    out_pi = output[:, :, :20]
+    out_mu_x = output[:, :, 20:40]
+    out_mu_y = output[:, :, 40:60]
+    out_sigma_x = output[:, :, 60:80]
+    out_sigma_y = output[:, :, 80:100]
+    out_ro = output[:, :, 100:120]
+    pen_logits = output[:, :, 120:123]
+    # out_mu = K.reshape(out_mu, [-1, numComonents*2, outputDim])
+    # out_mu = K.permute_dimensions(out_mu, [1, 0, 2])
+    # use softmax to normalize pi and q into prob distribution
+    max_pi = K.max(out_pi, axis = 1, keepdims=True)
+    out_pi = out_pi - max_pi
+    out_pi = K.exp(out_pi)
+    normalize_pi = 1 / K.sum(out_pi, axis=1, keepdims=True)
+    out_pi = normalize_pi * out_pi
+    out_q = K.softmax(pen_logits)
+    out_ro = K.tanh(out_ro)
+    # use exponential to make sure sigma is positive
+    out_sigma_x = K.exp(out_sigma_x)
+    out_sigma_y = K.exp(out_sigma_y)
+    return out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, out_q
+
+
+def tf_bi_normal(x, y, mu_x, mu_y, sigma_x, sigma_y, ro):
+    norm1 = subtract([x, mu_x])
+    norm2 = subtract([y, mu_y])
+    sigma = multiply([sigma_x, sigma_y])
+    z = (K.square(norm1 / sigma_x) + K.square(norm2 / sigma_y) - 2 *
+         multiply([ro, norm1, norm2]) / sigma)
+    ro_opp = 1 - K.square(ro)
+    result = K.exp(-z / (2 * ro_opp))
+    denom = 2 * np.pi * multiply([sigma, K.square(ro_opp)])
+    result = result / denom
+    return result
+
+
+def get_lossfunc(out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, out_q, x, y, logits):
+    # L_r loss term calculation, L_s part
+    result = tf_bi_normal(x, y, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro)
+    result = multiply([result, out_pi])
+    result = K.sum(result, axis=1, keepdims=True)
+    result = -K.log(result + 1e-8)
+
+    fs = 1.0 - logits[:, 2]
+    fs = Reshape((-1, 1))(fs)
+    result = multiply([result, fs])
+    # L_r loss term, L_p part
+    result1 = K.categorical_crossentropy(logits, out_q, from_logits = True)
+    result1 = Reshape((-1, 1))(result1)
+    result = result + result1
+    return K.mean(result)
+
+
+def mdn_loss(x, y, pen, output):
+    out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, out_q = get_mixture_coef(
+        output)
+    L_r = get_lossfunc(out_pi, out_mu_x, out_mu_y, out_sigma_x,
+                        out_sigma_y, out_ro, out_q, x, y, pen)
+    return L_r
+
 
 
 class Compiler:
@@ -50,10 +115,13 @@ class Compiler:
         self.x_test = dl.DataLoader(self.x_test, self.batch_size)
         self.x_test.normalize(normal_scale_factor)
 
-    def vae_loss(self, x, x_decoded_mean):
-        rec_loss = self.original_dim * metrics.binary_crossentropy(x, x_decoded_mean)
-        kl_loss = - 0.5 * K.sum(1 + self.z_log_sigma - K.square(self.z_mean) -
-                                K.exp(self.z_log_sigma), axis = -1)
+    def vae_loss(self, x, x_decoded):
+        val_x = x[:, :, 0]
+        val_y = x[:, :, 1]
+        pen = x[:, :, 2:]
+        rec_loss = mdn_loss(val_x, val_y, pen, x_decoded)
+        kl_loss = - 0.5 * K.mean(1 + self.z_log_sigma - K.square(self.z_mean) -
+                                 K.exp(self.z_log_sigma), axis = -1)
         return K.mean(rec_loss + kl_loss)
 
     def set_batches(self):
@@ -84,7 +152,7 @@ class Compiler:
 
     def compile_fit(self):
         # TODO fit the proper loss function
-        self.vae.vae.compile(loss = 'categorical_crossentropy', optimizer = 'rmsprop',
+        self.vae.vae.compile(loss = self.vae_loss, optimizer = 'adam',
                                metrics = ['accuracy'])
 
         self.load_weights()
@@ -139,4 +207,4 @@ def predict(classifier):
 
 model = Compiler(["cat", "flying_saucer"])
 model.compile_fit()
-draw(model)
+# draw(model)
