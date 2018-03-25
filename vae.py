@@ -23,7 +23,8 @@ def get_mixture_coef(output):
     out_ro = output[:, :, 100:120]
     pen_logits = output[:, :, 120:123]
     # out_mu = K.reshape(out_mu, [-1, numComonents*2, outputDim])
-    # out_mu = K.permute_dimensions(out_mu, [1, 0, 2])
+    out_mu_x = K.permute_dimensions(out_mu_x, [0, 2, 1])
+    out_mu_y = K.permute_dimensions(out_mu_y, [0, 2, 1])
     # use softmax to normalize pi and q into prob distribution
     max_pi = K.max(out_pi, axis = 1, keepdims=True)
     out_pi = out_pi - max_pi
@@ -41,13 +42,15 @@ def get_mixture_coef(output):
 def tf_bi_normal(x, y, mu_x, mu_y, sigma_x, sigma_y, ro):
     norm1 = subtract([x, mu_x])
     norm2 = subtract([y, mu_y])
+    norm1 = K.permute_dimensions(norm1, [0, 2, 1])
+    norm2 = K.permute_dimensions(norm2, [0, 2, 1])
     sigma = multiply([sigma_x, sigma_y])
-    z = (K.square(norm1 / sigma_x) + K.square(norm2 / sigma_y) - 2 *
-         multiply([ro, norm1, norm2]) / sigma)
+    z = (K.square(norm1 / (sigma_x + 1e-8)) + K.square(norm2 / (sigma_y + 1e-8)) - 2 *
+         multiply([ro, norm1, norm2]) / (sigma + 1e-8) + 1e-8)
     ro_opp = 1 - K.square(ro)
-    result = K.exp(-z / (2 * ro_opp))
-    denom = 2 * np.pi * multiply([sigma, K.square(ro_opp)])
-    result = result / denom
+    result = K.exp(-z / (2 * ro_opp + 1e-8))
+    denom = 2 * np.pi * multiply([sigma, K.square(ro_opp)]) + 1e-8
+    result = result / denom + 1e-8
     return result
 
 
@@ -55,12 +58,13 @@ def get_lossfunc(out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, o
     # L_r loss term calculation, L_s part
     result = tf_bi_normal(x, y, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro)
     result = multiply([result, out_pi])
+    result = K.permute_dimensions(result, [0, 2, 1])
     result = K.sum(result, axis=1, keepdims=True)
     result = -K.log(result + 1e-8)
-
     fs = 1.0 - logits[:, 2]
     fs = Reshape((-1, 1))(fs)
     result = multiply([result, fs])
+    result = K.permute_dimensions(result, [0, 2, 1])
     # L_r loss term, L_p part
     result1 = K.categorical_crossentropy(logits, out_q, from_logits = True)
     result1 = Reshape((-1, 1))(result1)
@@ -122,7 +126,7 @@ class Compiler:
         rec_loss = mdn_loss(val_x, val_y, pen, x_decoded)
         kl_loss = - 0.5 * K.mean(1 + self.z_log_sigma - K.square(self.z_mean) -
                                  K.exp(self.z_log_sigma), axis = -1)
-        return K.mean(rec_loss + kl_loss)
+        return rec_loss + 0.5 * kl_loss
 
     def set_batches(self):
         batches = None
@@ -151,7 +155,6 @@ class Compiler:
             print("Weights not found")
 
     def compile_fit(self):
-        # TODO fit the proper loss function
         self.vae.vae.compile(loss = self.vae_loss, optimizer = 'adam',
                                metrics = ['accuracy'])
 
@@ -180,31 +183,20 @@ class Compiler:
 def draw(vae):
     vae.load_weights()
 
-    stroke = np.random.randn(128)
-    stroke = stroke.reshape(1, stroke.shape[0])
-    stroke_ = vae.vae.vae.predict(stroke)
+    sample = vae.x_train.random_sample()
+    sample = dl.to_big_strokes(sample)
+    sample = sample.reshape(1, sample.shape[0], sample.shape[1])
+    # stroke = np.random.randn(128)
+    # stroke = stroke.reshape(1, stroke.shape[0])
+    stroke_ = vae.vae.vae.predict(sample)
     print(stroke_)
+    print(stroke_.shape[:])
     stroke_ = stroke_.reshape(stroke_.shape[1], stroke_.shape[2])
 
     stroke_ = dl.to_normal_strokes(stroke_)
-    dl.draw_strokes(stroke_)
-
-
-def predict(classifier):
-    classifier.load_weights()
-    cose = None
-    for i in range(10):
-        cfier = classifier.x_test.random_sample()
-        cfiera = dl.to_big_strokes(cfier)
-        dl.draw_strokes(cfier, svg_filename = "stroke_" + str(i) + ".svg")
-        cfiera = cfiera.reshape(1, 250 * 5)
-        if cose is None:
-            cose = cfiera
-        else:
-            cose = np.append(cose, cfiera, axis = 0)
-    print(classifier.model.predict(cose))
+    # dl.draw_strokes(stroke_)
 
 
 model = Compiler(["cat", "flying_saucer"])
 model.compile_fit()
-# draw(model)
+draw(model)
