@@ -11,7 +11,7 @@ import keras.backend as K
 from keras.layers import subtract, multiply, Reshape
 import dataloader as dl
 import model as vae
-import math
+import random
 
 
 def get_mixture_coef(output):
@@ -54,6 +54,7 @@ def tf_bi_normal(x, y, mu_x, mu_y, sigma_x, sigma_y, ro):
     return result
 
 
+# TODO sort dimensions out
 def get_lossfunc(out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, out_q, x, y, logits):
     # L_r loss term calculation, L_s part
     result = tf_bi_normal(x, y, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro)
@@ -80,17 +81,17 @@ def mdn_loss(x, y, pen, output):
     return L_r
 
 
-
 class Compiler:
 
     batch_size = 100
     original_dim = 250
     epochs = 3
 
-    def __init__(self, names):
-        self.vae = vae.Vae()
-        self.z_mean = self.vae.mean
-        self.z_log_sigma = self.vae.log_sigma
+    def __init__(self, names, generate = False):
+        self.vae = vae.Vae(generate)
+        if not generate:
+            self.z_mean = self.vae.mean
+            self.z_log_sigma = self.vae.log_sigma
         self.x_train = None
         self.x_valid = None
         self.x_test = None
@@ -124,9 +125,13 @@ class Compiler:
         val_y = x[:, :, 1]
         pen = x[:, :, 2:]
         rec_loss = mdn_loss(val_x, val_y, pen, x_decoded)
-        kl_loss = - 0.5 * K.mean(1 + self.z_log_sigma - K.square(self.z_mean) -
-                                 K.exp(self.z_log_sigma), axis = -1)
-        return rec_loss + 0.5 * kl_loss
+        try:
+            kl_loss = - 0.5 * K.mean(1 + self.z_log_sigma - K.square(self.z_mean) -
+                                     K.exp(self.z_log_sigma), axis = -1)
+            return rec_loss + 0.5 * kl_loss
+        except AttributeError:
+            print("no encoder")
+            return rec_loss
 
     def set_batches(self):
         batches = None
@@ -165,38 +170,120 @@ class Compiler:
         print(batches.shape[:])
         print(val_batches.shape[:])
 
-        # y = np.empty((5000, 128, 5))
-        # val_y = np.empty((1000, 128, 5))
-
-        # for i in range(5000):
-        #     y[i] = batches[i][:128]
-        #
-        #     if i < 1000:
-        #         val_y[i] = val_batches[i][:128]
-
         self.vae.vae.fit(batches, batches, shuffle = False,
                            batch_size = self.batch_size, epochs = self.epochs,
                            validation_data = (val_batches, val_batches))
         self.vae.vae.save_weights("vae_model", True)
 
 
-def draw(vae):
+def adjust_temp(pi_pdf, temp):
+    pi_pdf = np.log(pi_pdf) / temp
+    pi_pdf -= pi_pdf.max()
+    pi_pdf = np.exp(pi_pdf)
+    pi_pdf /= pi_pdf.sum()
+    return pi_pdf
+
+
+def get_pi_idx(x, pdf, temp=1.0, greedy=False):
+    """Samples from a pdf, optionally greedily."""
+    if greedy:
+        return np.argmax(pdf)
+    pdf = adjust_temp(np.copy(pdf), temp)
+    accumulate = 0
+    for i in range(0, pdf.size):
+        accumulate += pdf[i]
+        if accumulate >= x:
+            return i
+    print('Error with sampling ensemble.')
+    return -1
+
+
+def sample_gaussian_2d(mu1, mu2, s1, s2, rho, temp=1.0, greedy=False):
+    if greedy:
+        return mu1, mu2
+    mean = [mu1, mu2]
+    s1 *= temp * temp
+    s2 *= temp * temp
+    cov = [[s1 * s1, rho * s1 * s2], [rho * s1 * s2, s2 * s2]]
+    x = np.random.multivariate_normal(mean, cov, 1)
+    return x[0][0], x[0][1]
+
+
+def sample(model, seq_len=250, temperature=1.0, greedy_mode=False,
+           z=None):
+    """Samples a sequence from a pre-trained model."""
+
+    prev_x = np.zeros((1, 1, 5), dtype=np.float32)
+    prev_x[0, 0, 2] = 1
+    if z is None:
+        z = np.random.randn(1, 128)
+
+    strokes = np.zeros((seq_len, 5), dtype=np.float32)
+    mixture_params = []
+    greedy = False
+    temp = 1.0
+
+    for i in range(seq_len):
+
+        sample, h_out, c_out = model.predict([z, prev_x])
+
+        params = get_mixture_coef(sample)
+        [o_pi, o_mu1, o_mu2, o_sigma1, o_sigma2, o_corr, o_pen] = params
+
+        if i < 0:
+            greedy = False
+            temp = 1.0
+        else:
+            greedy = greedy_mode
+            temp = temperature
+
+        idx = get_pi_idx(random.random(), o_pi[0], temp, greedy)
+
+        idx_eos = get_pi_idx(random.random(), o_pen[0], temp, greedy)
+        eos = [0, 0, 0]
+        eos[idx_eos] = 1
+
+        next_x1, next_x2 = sample_gaussian_2d(o_mu1[0][idx], o_mu2[0][idx],
+                                              o_sigma1[0][idx], o_sigma2[0][idx],
+                                              o_corr[0][idx], np.sqrt(temp), greedy)
+
+        strokes[i, :] = [next_x1, next_x2, eos[0], eos[1], eos[2]]
+
+        params = [
+            o_pi[0], o_mu1[0], o_mu2[0], o_sigma1[0], o_sigma2[0], o_corr[0],
+            o_pen[0]
+        ]
+
+        mixture_params.append(params)
+
+        prev_x = np.zeros((1, 1, 5), dtype=np.float32)
+        prev_x[0][0] = np.array(
+            [next_x1, next_x2, eos[0], eos[1], eos[2]], dtype=np.float32)
+
+        model.h_out = h_out
+        model.c_out = c_out
+
+    return strokes, mixture_params
+
+
+def draw():
+    vae = Compiler(["cat", "flying_saucer"], True)
     vae.load_weights()
 
-    sample = vae.x_train.random_sample()
-    sample = dl.to_big_strokes(sample)
-    sample = sample.reshape(1, sample.shape[0], sample.shape[1])
-    # stroke = np.random.randn(128)
-    # stroke = stroke.reshape(1, stroke.shape[0])
-    stroke_ = vae.vae.vae.predict(sample)
+    stroke_, m = sample(vae.vae.vae, 250, 1, False, None)
+
+    # sample = vae.x_train.random_sample()
+    # sample = dl.to_big_strokes(sample)
+    # samp = samp.reshape(1, samp.shape[0], samp.shape[1])
+    # stroke_ = vae.vae.vae.predict(sample)
     print(stroke_)
     print(stroke_.shape[:])
     stroke_ = stroke_.reshape(stroke_.shape[1], stroke_.shape[2])
 
     stroke_ = dl.to_normal_strokes(stroke_)
-    # dl.draw_strokes(stroke_)
+    dl.draw_strokes(stroke_)
 
 
-model = Compiler(["cat", "flying_saucer"])
-model.compile_fit()
-draw(model)
+# model = Compiler(["cat", "flying_saucer"])
+# model.compile_fit()
+draw()

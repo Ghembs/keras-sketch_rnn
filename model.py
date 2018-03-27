@@ -7,7 +7,6 @@ Created on 19/02/2018
 
 from keras import backend as K
 from keras.engine.topology import Layer
-import tensorflow as tf
 from keras.layers import Input, Dense, Lambda, LSTM, Dropout, Bidirectional, Reshape, concatenate
 from keras.models import Model
 from recurrentshop import RecurrentModel, LSTMCell
@@ -24,6 +23,7 @@ class MixtureDensity(Layer):
         self.inputDim = inputShape[1]
         self.outputDim = self.numComponents * (1 + self.kernelDim) + 3
         self.Wo = K.variable(np.random.normal(scale=0.5, size = (self.inputDim, self.outputDim)))
+        # TODO check if random.normal is a meaningful choice
         self.bo = K.variable(np.random.normal(scale=0.5, size = self.outputDim))
 
         self.trainable_weights = [self.Wo, self.bo]
@@ -37,7 +37,8 @@ class MixtureDensity(Layer):
 
 
 class Vae:
-    input = Input((250, 5,))
+    max_len = 250
+    input = Input((max_len, 5,))
     decoder_input = Input(shape = (133,))
     h_in = Input(shape = (512,))
     c_in = Input(shape = (512,))
@@ -51,24 +52,32 @@ class Vae:
     dec_3 = LSTMCell(512)
     mdn = MixtureDensity(5, 20)
 
-    def __init__(self):
-        a = self.enc_1(self.input)
-        self.mean = self.enc_mean(a)
-        self.log_sigma = self.enc_log_sigma(a)
-        z = Lambda(self.sampling)([self.mean, self.log_sigma])
-        _h = self.h_init(z)
+    def __init__(self, generate = False):
+        self.h_out = None
+        self.c_out = None
 
-        _h = Reshape((512, 2,))(_h)
+        if not generate:
+            self.encoder = self.build_encoder()
+            self.mean, self.log_sigma = self.encoder(self.input)
+            self.z = Lambda(self.sampling)([self.mean, self.log_sigma])
+        else:
+            self.z = Input(shape = (128,))
 
-        _h_1 = Lambda(lambda x: x[:, :, 0])(_h)
-        _h_2 = Lambda(lambda x: x[:, :, 1])(_h)
+        if self.h_out is None:
+            _h = self.h_init(self.z)
 
-        z_ = Reshape((1, 128,))(z)
-        z_out = z_
-        for i in range(249):
-            z_out = concatenate([z_out, z_], axis = 1)
+            _h = Reshape((512, 2,))(_h)
 
-        z_out = concatenate([z_out, self.input], axis = 2)
+            _h_1 = Lambda(lambda x: x[:, :, 0])(_h)
+            _c_1 = Lambda(lambda x: x[:, :, 1])(_h)
+        else:
+            _h_1 = self.h_out
+            _c_1 = self.c_out
+
+        z_ = Reshape((1, 128,))(self.z)
+        z_ = Lambda(self.tile)(z_)
+
+        z_ = concatenate([z_, self.input], axis = 2)
 
         dec_out, h, c = self.dec_3([self.decoder_input, self.h_in, self.c_in])
 
@@ -78,11 +87,24 @@ class Vae:
                              initial_states = [self.h_in, self.c_in],
                              output = dec_out, final_states = [h, c],
                              readout_input = self.readout_in,
-                             return_sequences = True)
+                             return_sequences = True, return_states = True)
 
-        out = rnn(z_out, initial_state = [_h_1, _h_2])
+        out, self.h_out, self.c_out = rnn(z_, initial_state = [_h_1, _c_1])
 
-        self.vae = Model(self.input, out)
+        if generate:
+            self.vae = Model([self.z, self.input], out)
+        else:
+            self.vae = Model(self.input, out)
+
+    def tile(self, tensor):
+        return K.tile(tensor, [1, self.max_len, 1])
+
+    def build_encoder(self):
+        a = self.enc_1(self.input)
+        mean = self.enc_mean(a)
+        log_sigma = self.enc_log_sigma(a)
+        encoder = Model(self.input, [mean, log_sigma])
+        return encoder
 
     def sampling(self, args):
         z_mean, z_log_sigma = args
