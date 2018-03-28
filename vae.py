@@ -6,50 +6,48 @@ Created on 20/02/2018
 # vae
 
 import numpy as np
-from keras import metrics
+# from keras import metrics
 import keras.backend as K
-from keras.layers import subtract, multiply, Reshape
+# from keras.layers import subtract, multiply
 import dataloader as dl
 import model as vae
 import random
 
 
 def get_mixture_coef(output):
-    out_pi = output[:, :, :20]
-    out_mu_x = output[:, :, 20:40]
-    out_mu_y = output[:, :, 40:60]
-    out_sigma_x = output[:, :, 60:80]
-    out_sigma_y = output[:, :, 80:100]
-    out_ro = output[:, :, 100:120]
-    pen_logits = output[:, :, 120:123]
-    # out_mu = K.reshape(out_mu, [-1, numComonents*2, outputDim])
-    out_mu_x = K.permute_dimensions(out_mu_x, [0, 2, 1])
-    out_mu_y = K.permute_dimensions(out_mu_y, [0, 2, 1])
+    out_pi = output[:, 0, :20]
+    out_mu_x = output[:, 0, 20:40]
+    out_mu_y = output[:, 0, 40:60]
+    out_sigma_x = output[:, 0, 60:80]
+    out_sigma_y = output[:, 0, 80:100]
+    out_ro = output[:, 0, 100:120]
+    pen_logits = output[:, 0, 120:123]
     # use softmax to normalize pi and q into prob distribution
-    max_pi = K.max(out_pi, axis = 1, keepdims=True)
-    out_pi = out_pi - max_pi
-    out_pi = K.exp(out_pi)
-    normalize_pi = 1 / K.sum(out_pi, axis=1, keepdims=True)
-    out_pi = normalize_pi * out_pi
+    # max_pi = K.max(out_pi, axis = 1, keepdims=True)
+    # out_pi = out_pi - max_pi
+    # out_pi = K.exp(out_pi)
+    # normalize_pi = 1 / K.sum(out_pi, axis=1, keepdims=True)
+    # out_pi = normalize_pi * out_pi
+    out_pi = K.softmax(out_pi)
     out_q = K.softmax(pen_logits)
     out_ro = K.tanh(out_ro)
     # use exponential to make sure sigma is positive
     out_sigma_x = K.exp(out_sigma_x)
     out_sigma_y = K.exp(out_sigma_y)
-    return out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, out_q
+    return out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, pen_logits
 
 
 def tf_bi_normal(x, y, mu_x, mu_y, sigma_x, sigma_y, ro):
-    norm1 = subtract([x, mu_x])
-    norm2 = subtract([y, mu_y])
-    norm1 = K.permute_dimensions(norm1, [0, 2, 1])
-    norm2 = K.permute_dimensions(norm2, [0, 2, 1])
-    sigma = multiply([sigma_x, sigma_y])
-    z = (K.square(norm1 / (sigma_x + 1e-8)) + K.square(norm2 / (sigma_y + 1e-8)) - 2 *
-         multiply([ro, norm1, norm2]) / (sigma + 1e-8) + 1e-8)
+    x_ = K.reshape(x, (100, 1))
+    y_ = K.reshape(y, (100, 1))
+    norm1 = x_ - mu_x
+    norm2 = y_ - mu_y
+    sigma = sigma_x * sigma_y
+    z = (K.square(norm1 / (sigma_x + 1e-8)) + K.square(norm2 / (sigma_y + 1e-8)) - (2 *
+         ro * norm1 * norm2) / (sigma + 1e-8) + 1e-8)
     ro_opp = 1 - K.square(ro)
     result = K.exp(-z / (2 * ro_opp + 1e-8))
-    denom = 2 * np.pi * multiply([sigma, K.square(ro_opp)]) + 1e-8
+    denom = 2 * np.pi * sigma * K.square(ro_opp) + 1e-8
     result = result / denom + 1e-8
     return result
 
@@ -58,17 +56,15 @@ def tf_bi_normal(x, y, mu_x, mu_y, sigma_x, sigma_y, ro):
 def get_lossfunc(out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, out_q, x, y, logits):
     # L_r loss term calculation, L_s part
     result = tf_bi_normal(x, y, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro)
-    result = multiply([result, out_pi])
-    result = K.permute_dimensions(result, [0, 2, 1])
+    result = result * out_pi
     result = K.sum(result, axis=1, keepdims=True)
     result = -K.log(result + 1e-8)
     fs = 1.0 - logits[:, 2]
-    fs = Reshape((-1, 1))(fs)
-    result = multiply([result, fs])
-    result = K.permute_dimensions(result, [0, 2, 1])
+    fs = K.reshape(fs, (-1, 1))
+    result = result * fs
     # L_r loss term, L_p part
-    result1 = K.categorical_crossentropy(logits, out_q, from_logits = True)
-    result1 = Reshape((-1, 1))(result1)
+    result1 = K.categorical_crossentropy(out_q, logits, from_logits = True)
+    result1 = K.reshape(result1, (-1, 1))
     result = result + result1
     return K.mean(result)
 
@@ -85,11 +81,12 @@ class Compiler:
 
     batch_size = 100
     original_dim = 250
-    epochs = 3
+    epochs = 5
 
     def __init__(self, names, generate = False):
         self.vae = vae.Vae(generate)
         if not generate:
+            # TODO check if mean and log_sigma assigned this way are static
             self.z_mean = self.vae.mean
             self.z_log_sigma = self.vae.log_sigma
         self.x_train = None
@@ -102,11 +99,11 @@ class Compiler:
             # TODO check validity of "bytes" encoding
             dataset = np.load("Dataset/" + name + ".full.npz", encoding = 'bytes')
             if self.x_train is None:
-                self.x_train = dataset["train"][:2500]
+                self.x_train = dataset["train"][:10000]
                 self.x_valid = dataset["valid"]
                 self.x_test = dataset["test"]
             else:
-                self.x_train = np.concatenate((self.x_train, dataset["train"][:2500]))
+                self.x_train = np.concatenate((self.x_train, dataset["train"][:10000]))
                 self.x_valid = np.concatenate((self.x_valid, dataset["valid"]))
                 self.x_test = np.concatenate((self.x_test, dataset["test"]))
 
@@ -121,14 +118,15 @@ class Compiler:
         self.x_test.normalize(normal_scale_factor)
 
     def vae_loss(self, x, x_decoded):
-        val_x = x[:, :, 0]
-        val_y = x[:, :, 1]
-        pen = x[:, :, 2:]
+        target = K.reshape(x, [-1, 5])
+        val_x = target[:, 0]
+        val_y = target[:, 1]
+        pen = target[:, 2:]
         rec_loss = mdn_loss(val_x, val_y, pen, x_decoded)
         try:
             kl_loss = - 0.5 * K.mean(1 + self.z_log_sigma - K.square(self.z_mean) -
                                      K.exp(self.z_log_sigma), axis = -1)
-            return rec_loss + 0.5 * kl_loss
+            return rec_loss + 1 * kl_loss
         except AttributeError:
             print("no encoder")
             return rec_loss
@@ -136,14 +134,14 @@ class Compiler:
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(50):
+        for i in range(200):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
             else:
                 batches = np.append(batches, b, axis = 0)
 
-        for i in range(10):
+        for i in range(20):
             a, b, c = self.x_valid.get_batch(i)
             if val_batches is None:
                 val_batches = b
@@ -160,8 +158,7 @@ class Compiler:
             print("Weights not found")
 
     def compile_fit(self):
-        self.vae.vae.compile(loss = self.vae_loss, optimizer = 'adam',
-                               metrics = ['accuracy'])
+        self.vae.vae.compile(loss = self.vae_loss, optimizer = 'adam')
 
         self.load_weights()
 
@@ -170,9 +167,14 @@ class Compiler:
         print(batches.shape[:])
         print(val_batches.shape[:])
 
-        self.vae.vae.fit(batches, batches, shuffle = False,
-                           batch_size = self.batch_size, epochs = self.epochs,
-                           validation_data = (val_batches, val_batches))
+        _batches = np.reshape(batches, [-1, 5])
+        _batches = _batches[:20000, :]
+        _val_batches = np.reshape(val_batches, [-1, 5])
+        _val_batches = _val_batches[:2000, :]
+
+        self.vae.vae.fit(batches, _batches, shuffle = False,
+                         batch_size = self.batch_size, epochs = self.epochs,
+                         validation_data = (val_batches, _val_batches))
         self.vae.vae.save_weights("vae_model", True)
 
 
@@ -284,6 +286,6 @@ def draw():
     dl.draw_strokes(stroke_)
 
 
-# model = Compiler(["cat", "flying_saucer"])
-# model.compile_fit()
-draw()
+model = Compiler(["cat", "flying_saucer"])
+model.compile_fit()
+# draw()

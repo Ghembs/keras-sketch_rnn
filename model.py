@@ -20,10 +20,9 @@ class MixtureDensity(Layer):
         super(MixtureDensity, self).__init__(**kwargs)
 
     def build(self, inputShape):
-        self.inputDim = inputShape[1]
+        self.inputDim = inputShape[2]
         self.outputDim = self.numComponents * (1 + self.kernelDim) + 3
         self.Wo = K.variable(np.random.normal(scale=0.5, size = (self.inputDim, self.outputDim)))
-        # TODO check if random.normal is a meaningful choice
         self.bo = K.variable(np.random.normal(scale=0.5, size = self.outputDim))
 
         self.trainable_weights = [self.Wo, self.bo]
@@ -47,8 +46,7 @@ class Vae:
     enc_mean = Dense(128)
     enc_log_sigma = Dense(128)
     h_init = Dense(1024)
-    dec_1 = Dense(5)
-    dec_2 = Dense(123)
+    dec_1 = LSTM(512)
     dec_3 = LSTMCell(512)
     mdn = MixtureDensity(5, 20)
 
@@ -81,20 +79,25 @@ class Vae:
 
         dec_out, h, c = self.dec_3([self.decoder_input, self.h_in, self.c_in])
 
-        dec_out = self.mdn(dec_out)
+        # dec_out = self.mdn(dec_out)
 
         rnn = RecurrentModel(input = self.decoder_input,
                              initial_states = [self.h_in, self.c_in],
                              output = dec_out, final_states = [h, c],
-                             readout_input = self.readout_in,
                              return_sequences = True, return_states = True)
 
         out, self.h_out, self.c_out = rnn(z_, initial_state = [_h_1, _c_1])
+
+        out = Reshape((-1, 512,))(out)
+
+        out = self.mdn(out)
 
         if generate:
             self.vae = Model([self.z, self.input], out)
         else:
             self.vae = Model(self.input, out)
+
+        print(self.vae.summary())
 
     def tile(self, tensor):
         return K.tile(tensor, [1, self.max_len, 1])
