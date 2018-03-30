@@ -100,11 +100,11 @@ class Compiler:
         for name in names:
             dataset = np.load("Dataset/" + name + ".full.npz", encoding = 'bytes')
             if self.x_train is None:
-                self.x_train = dataset["train"][:10000]
+                self.x_train = dataset["train"][:50000]
                 self.x_valid = dataset["valid"]
                 self.x_test = dataset["test"]
             else:
-                self.x_train = np.concatenate((self.x_train, dataset["train"][:10000]))
+                self.x_train = np.concatenate((self.x_train, dataset["train"][:50000]))
                 self.x_valid = np.concatenate((self.x_valid, dataset["valid"]))
                 self.x_test = np.concatenate((self.x_test, dataset["test"]))
 
@@ -137,7 +137,7 @@ class Compiler:
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(200):
+        for i in range(1000):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
@@ -178,9 +178,8 @@ class Compiler:
         # _val_batches = np.reshape(val_batches, [-1, 5])
         # _val_batches = _val_batches[:1000, :]
         # TODO check best shuffle value
-        self.vae.vae.fit(batches, batches, shuffle = False,
-                         batch_size = self.batch_size, epochs = self.epochs,
-                         validation_data = (val_batches, val_batches))
+        self.vae.vae.fit(batches, batches, batch_size = self.batch_size,
+                         epochs = self.epochs, validation_data = (val_batches, val_batches))
         self.vae.encoder.save_weights("vae_enc", True)
         self.vae.decoder.save_weights("vae_dec", True)
 
