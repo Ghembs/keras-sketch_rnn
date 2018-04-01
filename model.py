@@ -49,7 +49,7 @@ class Vae:
     h_in = Input(shape = (512,))
     c_in = Input(shape = (512,))
     readout_in = Input(shape = (133,))
-    enc_1 = Bidirectional(LSTM(256, recurrent_dropout = 0.1))
+    enc_1 = Bidirectional(LSTM(256))
     enc_mean = Dense(128)
     enc_log_sigma = Dense(128)
     h_init = Dense(1024, activation = 'tanh')

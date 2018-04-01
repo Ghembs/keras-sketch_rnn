@@ -12,7 +12,7 @@ from keras import optimizers
 import dataloader as dl
 import model as vae
 import random
-from keras.callbacks import History
+from keras import callbacks
 
 # TODO keep checking if better with max_pi, max_q, check with simple K.softmax too
 def get_mixture_coef(output):
@@ -142,19 +142,19 @@ class Compiler:
         log_sigma = x_encoded[:, 128:]
         kl_loss = - 0.5 * K.mean(1 + log_sigma - K.square(mean) -
                                  K.exp(log_sigma), axis = -1)
-        return K.maximum(kl_loss, self.kl_tolerance)
+        return kl_loss  # K.maximum(kl_loss, self.kl_tolerance)
 
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(100):
+        for i in range(1000):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
             else:
                 batches = np.append(batches, b, axis = 0)
 
-        for i in range(10):
+        for i in range(50):
             a, b, c = self.x_valid.get_batch(i)
             if val_batches is None:
                 val_batches = b
@@ -175,6 +175,10 @@ class Compiler:
     # TODO check if useful to separate the losses, training on single batches and calculating them
     # TODO on the go
     def compile_fit(self):
+        board = callbacks.TensorBoard(log_dir = 'log', histogram_freq = 0.5,
+                                      batch_size = 100, write_graph = True,
+                                      write_grads = True, write_images = True,
+                                      embeddings_freq = 1, embeddings_layer_names = ['rec', 'kl'])
         adam = optimizers.Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.999,
                                decay = 0.999)
         self.vae.vae.compile(loss = {'rec': self.vae_loss, 'kl': self.encoder_loss},
@@ -190,7 +194,8 @@ class Compiler:
 
         self.vae.vae.fit({'stroke_batch': batches}, {'rec': batches, 'kl': enc},
                          batch_size = self.batch_size, epochs = self.epochs,
-                         validation_data = (val_batches, [val_batches, val_enc]))
+                         validation_data = (val_batches, [val_batches, val_enc]),
+                         callbacks = [board])
         self.vae.encoder.save_weights("vae_enc", True)
         self.vae.decoder.save_weights("vae_dec", True)
 
@@ -345,6 +350,7 @@ def draw(generate = True):
 
 
 model = Compiler(["cat", "flying_saucer"])
-model.fit_eacn_batch()
+model.compile_fit()
+
 # draw(False)
 
