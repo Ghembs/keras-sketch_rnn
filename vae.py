@@ -102,10 +102,12 @@ class Compiler:
         self.x_train = None
         self.x_valid = None
         self.x_test = None
+
         self.board = callbacks.TensorBoard(log_dir = 'log', histogram_freq = 0.5,
                                       batch_size = 100, write_graph = True,
-                                      write_grads = True, write_images = False,
-                                      embeddings_freq = 1, embeddings_layer_names = None)
+                                      write_grads = True, write_images = True,
+                                      embeddings_freq = 1,
+                                      embeddings_layer_names = ['encoder', 'decoder'])
         self.load_dataset(names)
 
     def load_dataset(self, names):
@@ -151,7 +153,7 @@ class Compiler:
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(1000):
+        for i in range(100):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
@@ -192,7 +194,7 @@ class Compiler:
         enc = np.zeros(shape = (batches.shape[0], 256))
         val_enc = np.zeros(shape = (val_batches.shape[0], 256))
 
-        self.vae.vae.fit({'stroke_batch': batches}, {'rec': batches, 'kl': enc},
+        self.vae.vae.fit(batches, [batches, enc],
                          batch_size = self.batch_size, epochs = self.epochs,
                          validation_data = (val_batches, [val_batches, val_enc]),
                          callbacks = [self.board])
@@ -212,8 +214,7 @@ class Compiler:
             a_, b_, c_ = self.x_valid.random_batch()
             loss = self.vae.vae.fit(b, [b, np.zeros(shape=(100, 256))], verbose = 0,
                                     batch_size = self.batch_size, epochs = 1,
-                                    validation_data = (b_, [b_, np.zeros(shape=(100, 256))]),
-                                    callbacks = [self.board])
+                                    validation_data = (b_, [b_, np.zeros(shape=(100, 256))]))
             if step % 20 == 0:
                 print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
                       "kl_loss: {:.4f}, acc: {:.5f}, val_loss: {:.5f}, "
@@ -233,7 +234,7 @@ class Compiler:
             curr_kl_weight = (self.kl_weight - (self.kl_weight - self.kl_weight_start) *
                               (self.kl_decay_rate) ** step)
             K.set_value(self.vae.vae.optimizer.lr, curr_learning_rate)
-            self.vae.vae.loss_weights['kl'] = curr_kl_weight
+            self.vae.vae.loss_weights[1] = curr_kl_weight
 
 
 def adjust_temp(pi_pdf, temp):
@@ -341,7 +342,7 @@ def draw(generate = True):
         stroke = np.reshape(stroke, [1, stroke.shape[0], stroke.shape[1]])
         z = K.eval(encoder.vae.sampling(encoder.vae.encoder.predict(stroke)))
 
-    stroke_, m = sample(decoder.vae.decoder, 70, 1, False, z)
+    stroke_, m = sample(decoder.vae.decoder, 30, 1, False, z)
 
     print(stroke_)
     print(stroke_.shape[:])
@@ -353,5 +354,5 @@ def draw(generate = True):
 model = Compiler(["cat", "flying_saucer"])
 model.fit_eacn_batch()
 
-# draw()
+# draw(False)
 

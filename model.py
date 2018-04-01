@@ -84,7 +84,7 @@ class Vae:
         mean = self.enc_mean(a)
         log_sigma = self.enc_log_sigma(a)
         out = concatenate([mean, log_sigma])
-        encoder = Model(self.input, out)
+        encoder = Model(self.input, out, name = 'encoder')
         return encoder
 
     def build_decoder(self):
@@ -113,7 +113,7 @@ class Vae:
 
         out = self.mdn(out)
 
-        decoder = Model([self.dec_input, self.input], out)
+        decoder = Model([self.dec_input, self.input], out, name = 'decoder')
 
         return decoder
 
