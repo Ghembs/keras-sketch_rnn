@@ -22,8 +22,9 @@ class MixtureDensity(Layer):
     def build(self, inputShape):
         self.inputDim = inputShape[2]
         self.outputDim = self.numComponents * (1 + self.kernelDim) + 3
-        self.Wo = K.variable(np.random.normal(scale=0.5, size = (self.inputDim, self.outputDim)))
-        self.bo = K.variable(np.random.normal(scale=0.5, size = self.outputDim))
+        self.Wo = K.variable(np.random.normal(scale=0.5, size = (self.inputDim, self.outputDim)),
+                             name = 'W')
+        self.bo = K.variable(np.random.normal(scale=0.5, size = self.outputDim), name = 'b')
 
         # self.Wo = self.add_weight(name = 'mixture_wo', shape = (self.inputDim, self.outputDim),
         #                           initializer = 'glorot_uniform', trainable = True)
@@ -49,10 +50,10 @@ class Vae:
     h_in = Input(shape = (512,))
     c_in = Input(shape = (512,))
     readout_in = Input(shape = (133,))
-    enc_1 = Bidirectional(LSTM(256))
-    enc_mean = Dense(128)
-    enc_log_sigma = Dense(128)
-    h_init = Dense(1024, activation = 'tanh')
+    enc_1 = Bidirectional(LSTM(256, name = 'Enc_RNN'), name = 'BiDir')
+    enc_mean = Dense(128, name = 'mean')
+    enc_log_sigma = Dense(128, name = 'log_sigma')
+    h_init = Dense(1024, activation = 'tanh', name = 'state_init')
     dec_1 = LSTM(512)
     dec_3 = LSTMCell(512)
     mdn = MixtureDensity(5, 20)
@@ -83,7 +84,7 @@ class Vae:
         mean = self.enc_mean(a)
         log_sigma = self.enc_log_sigma(a)
         out = concatenate([mean, log_sigma])
-        encoder = Model(self.input, out, name = "kl")
+        encoder = Model(self.input, out)
         return encoder
 
     def build_decoder(self):
@@ -106,13 +107,13 @@ class Vae:
         rnn = RecurrentModel(input = self.decoder_input,
                              initial_states = [self.h_in, self.c_in],
                              output = dec_out, final_states = [h, c],
-                             return_sequences = True)
+                             return_sequences = True, name = 'Dec_RNN')
 
         out = rnn(z_, initial_state = [_h_1, _c_1])
 
         out = self.mdn(out)
 
-        decoder = Model([self.dec_input, self.input], out, name = "rec")
+        decoder = Model([self.dec_input, self.input], out)
 
         return decoder
 

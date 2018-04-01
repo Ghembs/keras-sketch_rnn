@@ -102,6 +102,10 @@ class Compiler:
         self.x_train = None
         self.x_valid = None
         self.x_test = None
+        self.board = callbacks.TensorBoard(log_dir = 'log', histogram_freq = 0.5,
+                                      batch_size = 100, write_graph = True,
+                                      write_grads = True, write_images = False,
+                                      embeddings_freq = 1, embeddings_layer_names = None)
         self.load_dataset(names)
 
     def load_dataset(self, names):
@@ -166,8 +170,8 @@ class Compiler:
     def load_weights(self):
         try:
             if not self.generate:
-                self.vae.encoder.load_weights("vae_enc")
-            self.vae.decoder.load_weights("vae_dec")
+                self.vae.encoder.load_weights("weights/vae_enc_2000")
+            self.vae.decoder.load_weights("weights/vae_dec_2000")
             print("Loaded weights from file")
         except IOError:
             print("Weights not found")
@@ -175,14 +179,10 @@ class Compiler:
     # TODO check if useful to separate the losses, training on single batches and calculating them
     # TODO on the go
     def compile_fit(self):
-        board = callbacks.TensorBoard(log_dir = 'log', histogram_freq = 0.5,
-                                      batch_size = 100, write_graph = True,
-                                      write_grads = True, write_images = True,
-                                      embeddings_freq = 1, embeddings_layer_names = ['rec', 'kl'])
         adam = optimizers.Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.999,
                                decay = 0.999)
-        self.vae.vae.compile(loss = {'rec': self.vae_loss, 'kl': self.encoder_loss},
-                             loss_weights ={'rec': 1, 'kl': 1}, optimizer = adam,
+        self.vae.vae.compile(loss = [self.vae_loss, self.encoder_loss],
+                             loss_weights =[1, 1], optimizer = adam,
                              metrics = ['accuracy'])
 
         self.load_weights()
@@ -195,14 +195,14 @@ class Compiler:
         self.vae.vae.fit({'stroke_batch': batches}, {'rec': batches, 'kl': enc},
                          batch_size = self.batch_size, epochs = self.epochs,
                          validation_data = (val_batches, [val_batches, val_enc]),
-                         callbacks = [board])
+                         callbacks = [self.board])
         self.vae.encoder.save_weights("vae_enc", True)
         self.vae.decoder.save_weights("vae_dec", True)
 
     def fit_eacn_batch(self):
         adam = optimizers.Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.999)
-        self.vae.vae.compile(loss = {'rec': self.vae_loss, 'kl': self.encoder_loss},
-                             loss_weights ={'rec': 1, 'kl': 0.01}, optimizer = adam,
+        self.vae.vae.compile(loss = [self.vae_loss, self.encoder_loss],
+                             loss_weights =[1, 0.01], optimizer = adam,
                              metrics = ['accuracy'])
 
         self.load_weights()
@@ -212,7 +212,8 @@ class Compiler:
             a_, b_, c_ = self.x_valid.random_batch()
             loss = self.vae.vae.fit(b, [b, np.zeros(shape=(100, 256))], verbose = 0,
                                     batch_size = self.batch_size, epochs = 1,
-                                    validation_data = (b_, [b_, np.zeros(shape=(100, 256))]))
+                                    validation_data = (b_, [b_, np.zeros(shape=(100, 256))]),
+                                    callbacks = [self.board])
             if step % 20 == 0:
                 print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
                       "kl_loss: {:.4f}, acc: {:.5f}, val_loss: {:.5f}, "
@@ -222,8 +223,8 @@ class Compiler:
                                                              loss.history['rec_acc'][-1],
                                                              loss.history['val_loss'][-1],
                                                              K.get_value(self.vae.vae.optimizer.lr),
-                                                             self.vae.vae.loss_weights['kl']))
-            if step % 1000 == 0 and step > 0:
+                                                             self.vae.vae.loss_weights[1]))
+            if step % 500 == 0 and step > 0:
                 self.vae.encoder.save_weights("weights/vae_enc_" + str(step), True)
                 self.vae.decoder.save_weights("weights/vae_dec_" + str(step), True)
 
@@ -340,7 +341,7 @@ def draw(generate = True):
         stroke = np.reshape(stroke, [1, stroke.shape[0], stroke.shape[1]])
         z = K.eval(encoder.vae.sampling(encoder.vae.encoder.predict(stroke)))
 
-    stroke_, m = sample(decoder.vae.decoder, 30, 1, False, z)
+    stroke_, m = sample(decoder.vae.decoder, 70, 1, False, z)
 
     print(stroke_)
     print(stroke_.shape[:])
@@ -350,7 +351,7 @@ def draw(generate = True):
 
 
 model = Compiler(["cat", "flying_saucer"])
-model.compile_fit()
+model.fit_eacn_batch()
 
-# draw(False)
+# draw()
 
