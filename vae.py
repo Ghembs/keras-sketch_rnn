@@ -12,6 +12,7 @@ from keras import optimizers
 import dataloader as dl
 import model as vae
 import random
+from keras.callbacks import History
 
 # TODO keep checking if better with max_pi, max_q, check with simple K.softmax too
 def get_mixture_coef(output):
@@ -87,6 +88,13 @@ class Compiler:
     batch_size = 100
     original_dim = 250
     epochs = 5
+    kl_tolerance = 0.2
+    kl_weight_start = 0.01
+    kl_weight = 0.5
+    learning_rate = 0.001
+    decay_rate = 0.9999
+    kl_decay_rate = 0.99995
+    min_learning_rate = 0.00001
 
     def __init__(self, names, generate = False, max_len = 250):
         self.generate = generate
@@ -100,11 +108,11 @@ class Compiler:
         for name in names:
             dataset = np.load("Dataset/" + name + ".full.npz", encoding = 'bytes')
             if self.x_train is None:
-                self.x_train = dataset["train"][:50000]
+                self.x_train = dataset["train"]
                 self.x_valid = dataset["valid"]
                 self.x_test = dataset["test"]
             else:
-                self.x_train = np.concatenate((self.x_train, dataset["train"][:50000]))
+                self.x_train = np.concatenate((self.x_train, dataset["train"]))
                 self.x_valid = np.concatenate((self.x_valid, dataset["valid"]))
                 self.x_test = np.concatenate((self.x_test, dataset["test"]))
 
@@ -126,25 +134,27 @@ class Compiler:
         pen = target[:, 2:]
         output = K.reshape(x_decoded, [-1, 123])
         rec_loss = mdn_loss(val_x, val_y, pen, output)
-        try:
-            kl_loss = - 0.5 * K.mean(1 + self.vae.log_sigma - K.square(self.vae.mean) -
-                                     K.exp(self.vae.log_sigma), axis = -1)
-            return rec_loss + 1 * kl_loss
-        except AttributeError:
-            print("no encoder")
-            return rec_loss
+
+        return rec_loss
+
+    def encoder_loss(self, x, x_encoded):
+        mean = x_encoded[:, :128]
+        log_sigma = x_encoded[:, 128:]
+        kl_loss = - 0.5 * K.mean(1 + log_sigma - K.square(mean) -
+                                 K.exp(log_sigma), axis = -1)
+        return K.maximum(kl_loss, self.kl_tolerance)
 
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(1000):
+        for i in range(100):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
             else:
                 batches = np.append(batches, b, axis = 0)
 
-        for i in range(20):
+        for i in range(10):
             a, b, c = self.x_valid.get_batch(i)
             if val_batches is None:
                 val_batches = b
@@ -167,21 +177,57 @@ class Compiler:
     def compile_fit(self):
         adam = optimizers.Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.999,
                                decay = 0.999)
-        self.vae.vae.compile(loss = self.vae_loss, optimizer = adam, metrics = ['accuracy'])
+        self.vae.vae.compile(loss = {'rec': self.vae_loss, 'kl': self.encoder_loss},
+                             loss_weights ={'rec': 1, 'kl': 1}, optimizer = adam,
+                             metrics = ['accuracy'])
 
         self.load_weights()
 
         batches, val_batches = self.set_batches()
 
-        # _batches = np.reshape(batches, [-1, 5])
-        # _batches = _batches[:5000, :]
-        # _val_batches = np.reshape(val_batches, [-1, 5])
-        # _val_batches = _val_batches[:1000, :]
-        # TODO check best shuffle value
-        self.vae.vae.fit(batches, batches, batch_size = self.batch_size,
-                         epochs = self.epochs, validation_data = (val_batches, val_batches))
+        enc = np.zeros(shape = (batches.shape[0], 256))
+        val_enc = np.zeros(shape = (val_batches.shape[0], 256))
+
+        self.vae.vae.fit({'stroke_batch': batches}, {'rec': batches, 'kl': enc},
+                         batch_size = self.batch_size, epochs = self.epochs,
+                         validation_data = (val_batches, [val_batches, val_enc]))
         self.vae.encoder.save_weights("vae_enc", True)
         self.vae.decoder.save_weights("vae_dec", True)
+
+    def fit_eacn_batch(self):
+        adam = optimizers.Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.999)
+        self.vae.vae.compile(loss = {'rec': self.vae_loss, 'kl': self.encoder_loss},
+                             loss_weights ={'rec': 1, 'kl': 0.01}, optimizer = adam,
+                             metrics = ['accuracy'])
+
+        self.load_weights()
+
+        for step in range(1000000):
+            a, b, c = self.x_train.random_batch()
+            a_, b_, c_ = self.x_valid.random_batch()
+            loss = self.vae.vae.fit(b, [b, np.zeros(shape=(100, 256))], verbose = 0,
+                                    batch_size = self.batch_size, epochs = 1,
+                                    validation_data = (b_, [b_, np.zeros(shape=(100, 256))]))
+            if step % 20 == 0:
+                print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
+                      "kl_loss: {:.4f}, acc: {:.5f}, val_loss: {:.5f}, "
+                      "lr: {:.5f}, kl_weight: {:.4f}".format(step, loss.history['loss'][-1],
+                                                             loss.history['rec_loss'][-1],
+                                                             loss.history['kl_loss'][-1],
+                                                             loss.history['rec_acc'][-1],
+                                                             loss.history['val_loss'][-1],
+                                                             K.get_value(self.vae.vae.optimizer.lr),
+                                                             self.vae.vae.loss_weights['kl']))
+            if step % 1000 == 0 and step > 0:
+                self.vae.encoder.save_weights("weights/vae_enc_" + str(step), True)
+                self.vae.decoder.save_weights("weights/vae_dec_" + str(step), True)
+
+            curr_learning_rate = ((self.learning_rate - self.min_learning_rate) *
+                                  (self.decay_rate) ** step + self.min_learning_rate)
+            curr_kl_weight = (self.kl_weight - (self.kl_weight - self.kl_weight_start) *
+                              (self.kl_decay_rate) ** step)
+            K.set_value(self.vae.vae.optimizer.lr, curr_learning_rate)
+            self.vae.vae.loss_weights['kl'] = curr_kl_weight
 
 
 def adjust_temp(pi_pdf, temp):
@@ -237,7 +283,7 @@ def sample(model, seq_len=250, temperature=1.0, greedy_mode=False,
     for i in range(seq_len):
         print(i)
 
-        sample, h_out, c_out = model.predict([z, prev_x])
+        sample = model.predict([z, prev_x])
 
         sample = K.reshape(sample, [1, -1])
 
@@ -276,24 +322,29 @@ def sample(model, seq_len=250, temperature=1.0, greedy_mode=False,
     return strokes, mixture_params
 
 
-def draw():
-    vae = Compiler(["cat", "flying_saucer"], True, 1)
-    vae.load_weights()
+def draw(generate = True):
+    decoder = Compiler(["cat", "flying_saucer"], generate, 1)
+    decoder.load_weights()
 
-    stroke_, m = sample(vae.vae.decoder, 100, 1, False, None)
+    z = None
+    if not generate:
+        encoder = Compiler(["cat", "flying_saucer"])
+        encoder.load_weights()
+        stroke = encoder.x_train.random_sample()
+        stroke = dl.to_big_strokes(stroke)
+        stroke = np.reshape(stroke, [1, stroke.shape[0], stroke.shape[1]])
+        z = K.eval(encoder.vae.sampling(encoder.vae.encoder.predict(stroke)))
 
-    # sample = vae.x_train.random_sample()
-    # sample = dl.to_big_strokes(sample)
-    # samp = samp.reshape(1, samp.shape[0], samp.shape[1])
-    # stroke_ = vae.vae.vae.predict(sample)
+    stroke_, m = sample(decoder.vae.decoder, 30, 1, False, z)
+
     print(stroke_)
     print(stroke_.shape[:])
-    # stroke_ = stroke_.reshape(stroke_.shape[0], stroke_.shape[1])
-
     stroke_ = dl.to_normal_strokes(stroke_)
+    print(stroke_)
     dl.draw_strokes(stroke_)
 
 
 model = Compiler(["cat", "flying_saucer"])
-model.compile_fit()
-# draw()
+model.fit_eacn_batch()
+# draw(False)
+

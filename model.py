@@ -49,7 +49,7 @@ class Vae:
     h_in = Input(shape = (512,))
     c_in = Input(shape = (512,))
     readout_in = Input(shape = (133,))
-    enc_1 = Bidirectional(LSTM(256))
+    enc_1 = Bidirectional(LSTM(256, recurrent_dropout = 0.1))
     enc_mean = Dense(128)
     enc_log_sigma = Dense(128)
     h_init = Dense(1024, activation = 'tanh')
@@ -60,16 +60,18 @@ class Vae:
     def __init__(self, generate = False, max_len = 250):
         self.generate = generate
         self.max_len = max_len
-        self.input = Input((max_len, 5,))
+        self.input = Input((max_len, 5,), name = "stroke_batch")
 
         self.decoder = self.build_decoder()
 
         if not self.generate:
             self.encoder = self.build_encoder()
-            self.mean, self.log_sigma = self.encoder(self.input)
+            encoded = self.encoder(self.input)
+            self.mean = Lambda(lambda x: x[:, :128])(encoded)
+            self.log_sigma = Lambda(lambda x: x[:, 128:])(encoded)
             self.z = Lambda(self.sampling)([self.mean, self.log_sigma])
-            out, self.h_out, self.c_out = self.decoder([self.z, self.input])
-            self.vae = Model(self.input, out)
+            out = self.decoder([self.z, self.input])
+            self.vae = Model(self.input, [out, encoded])
 
             print(self.vae.summary())
 
@@ -80,7 +82,8 @@ class Vae:
         a = self.enc_1(self.input)
         mean = self.enc_mean(a)
         log_sigma = self.enc_log_sigma(a)
-        encoder = Model(self.input, [mean, log_sigma])
+        out = concatenate([mean, log_sigma])
+        encoder = Model(self.input, out, name = "kl")
         return encoder
 
     def build_decoder(self):
@@ -103,13 +106,13 @@ class Vae:
         rnn = RecurrentModel(input = self.decoder_input,
                              initial_states = [self.h_in, self.c_in],
                              output = dec_out, final_states = [h, c],
-                             return_sequences = True, return_states = True)
+                             return_sequences = True)
 
-        out, h_out, c_out = rnn(z_, initial_state = [_h_1, _c_1])
+        out = rnn(z_, initial_state = [_h_1, _c_1])
 
         out = self.mdn(out)
 
-        decoder = Model([self.dec_input, self.input], [out, h_out, c_out])
+        decoder = Model([self.dec_input, self.input], out, name = "rec")
 
         return decoder
 
