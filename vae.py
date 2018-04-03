@@ -6,13 +6,13 @@ Created on 20/02/2018
 # vae
 
 import numpy as np
-# from keras import metrics
 import keras.backend as K
 from keras import optimizers
 import dataloader as dl
 import model as vae
 import random
 from keras import callbacks
+
 
 # TODO keep checking if better with max_pi, max_q, check with simple K.softmax too
 def get_mixture_coef(output):
@@ -62,7 +62,6 @@ def get_lossfunc(out_pi, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro, o
     # L_r loss term calculation, L_s part
     result = tf_bi_normal(x, y, out_mu_x, out_mu_y, out_sigma_x, out_sigma_y, out_ro)
     result = result * out_pi
-    # result = K.permute_dimensions(result, [0, 2, 1])
     result = K.sum(result, axis=1, keepdims=True)
     result = -K.log(result + 1e-8)
     fs = 1.0 - logits[:, 2]
@@ -153,7 +152,7 @@ class Compiler:
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(100):
+        for i in range(1000):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
@@ -172,8 +171,8 @@ class Compiler:
     def load_weights(self):
         try:
             if not self.generate:
-                self.vae.encoder.load_weights("weights/vae_enc_2000")
-            self.vae.decoder.load_weights("weights/vae_dec_2000")
+                self.vae.encoder.load_weights("weights/vae_enc")
+            self.vae.decoder.load_weights("weights/vae_dec")
             print("Loaded weights from file")
         except IOError:
             print("Weights not found")
@@ -198,8 +197,8 @@ class Compiler:
                          batch_size = self.batch_size, epochs = self.epochs,
                          validation_data = (val_batches, [val_batches, val_enc]),
                          callbacks = [self.board])
-        self.vae.encoder.save_weights("vae_enc", True)
-        self.vae.decoder.save_weights("vae_dec", True)
+        self.vae.encoder.save_weights("weights/vae_enc", True)
+        self.vae.decoder.save_weights("weights/vae_dec", True)
 
     def fit_eacn_batch(self):
         adam = optimizers.Adam(lr = 0.001, beta_1 = 0.9, beta_2 = 0.999)
@@ -212,19 +211,25 @@ class Compiler:
         for step in range(1000000):
             a, b, c = self.x_train.random_batch()
             a_, b_, c_ = self.x_valid.random_batch()
-            loss = self.vae.vae.fit(b, [b, np.zeros(shape=(100, 256))], verbose = 0,
-                                    batch_size = self.batch_size, epochs = 1,
-                                    validation_data = (b_, [b_, np.zeros(shape=(100, 256))]))
+            loss = self.vae.vae.train_on_batch(b, [b, np.zeros(shape=(100, 256))])
+            # loss = self.vae.vae.fit(b, [b, np.zeros(shape=(100, 256))], verbose = 0,
+            #                         batch_size = self.batch_size, epochs = 1,
+            #                         validation_data = (b_, [b_, np.zeros(shape=(100, 256))]))
             if step % 20 == 0:
                 print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
-                      "kl_loss: {:.4f}, acc: {:.5f}, val_loss: {:.5f}, "
-                      "lr: {:.5f}, kl_weight: {:.4f}".format(step, loss.history['loss'][-1],
-                                                             loss.history['rec_loss'][-1],
-                                                             loss.history['kl_loss'][-1],
-                                                             loss.history['rec_acc'][-1],
-                                                             loss.history['val_loss'][-1],
-                                                             K.get_value(self.vae.vae.optimizer.lr),
-                                                             self.vae.vae.loss_weights[1]))
+                      "kl_loss: {:.4f}, acc: {:.5f}, kl_acc: {:.5f}, lr: {:.5f}, kl_weight: "
+                      "{:.4f}".format(step, loss[0], loss[1], loss[2], loss[3], loss[4],
+                                      K.get_value(self.vae.vae.optimizer.lr),
+                                      self.vae.vae.loss_weights[1]))
+                # print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
+                #       "kl_loss: {:.4f}, acc: {:.5f}, val_loss: {:.5f}, "
+                #       "lr: {:.5f}, kl_weight: {:.4f}".format(step, loss.history['loss'][-1],
+                #                                              loss.history['decoder_loss'][-1],
+                #                                              loss.history['encoder_loss'][-1],
+                #                                              loss.history['decoder_acc'][-1],
+                #                                              loss.history['encoder_loss'][-1],
+                #                                              K.get_value(self.vae.vae.optimizer.lr),
+                #                                              self.vae.vae.loss_weights[1]))
             if step % 500 == 0 and step > 0:
                 self.vae.encoder.save_weights("weights/vae_enc_" + str(step), True)
                 self.vae.decoder.save_weights("weights/vae_dec_" + str(step), True)
@@ -352,7 +357,7 @@ def draw(generate = True):
 
 
 model = Compiler(["cat", "flying_saucer"])
-model.fit_eacn_batch()
+model.compile_fit()
 
 # draw(False)
 

@@ -26,11 +26,6 @@ class MixtureDensity(Layer):
                              name = 'W')
         self.bo = K.variable(np.random.normal(scale=0.5, size = self.outputDim), name = 'b')
 
-        # self.Wo = self.add_weight(name = 'mixture_wo', shape = (self.inputDim, self.outputDim),
-        #                           initializer = 'glorot_uniform', trainable = True)
-        # self.bo = self.add_weight(name = 'mixture_bo', shape = (self.outputDim,),
-        #                           initializer = 'glorot_uniform', trainable = True)
-
         super(MixtureDensity, self).build(inputShape)
 
         self.trainable_weights = [self.Wo, self.bo]
