@@ -207,7 +207,15 @@ def conditional_generation(model, operation, temp, datasets, wrong = False):
     z0 = model.encode(stroke, name = 'z0_sample.svg')
 
     if operation == 0:
-        _ = model.decode(z0, temperature = temp)
+        i = 0
+        while i < 1:
+            try:
+                i = int(input("Insert number of pictures to generate from single sample "
+                              "(blank for 1):\n"))
+            except ValueError:
+                i = 1
+        for j in range(i):
+            _ = model.decode(z0, temperature = temp, name = 'dec' + str(j) + '_sample.svg')
     else:
         if operation == 2:
             stroke = extract_stroke(model, datasets[1], wrong)
