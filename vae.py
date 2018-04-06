@@ -97,6 +97,7 @@ class Compiler:
 
     def __init__(self, names, generate = False, max_len = 250):
         self.generate = generate
+        self.original_dim = max_len
         self.vae = vae.Vae(self.generate, max_len)
         self.x_train = None
         self.x_valid = None
@@ -113,11 +114,11 @@ class Compiler:
         for name in names:
             dataset = np.load("Dataset/" + name + ".full.npz", encoding = 'bytes')
             if self.x_train is None:
-                self.x_train = dataset["train"]
+                self.x_train = dataset["train"][:10000]
                 self.x_valid = dataset["valid"]
                 self.x_test = dataset["test"]
             else:
-                self.x_train = np.concatenate((self.x_train, dataset["train"]))
+                self.x_train = np.concatenate((self.x_train, dataset["train"][:10000]))
                 self.x_valid = np.concatenate((self.x_valid, dataset["valid"]))
                 self.x_test = np.concatenate((self.x_test, dataset["test"]))
 
@@ -147,19 +148,19 @@ class Compiler:
         log_sigma = x_encoded[:, 128:]
         kl_loss = - 0.5 * K.mean(1 + log_sigma - K.square(mean) -
                                  K.exp(log_sigma), axis = -1)
-        return kl_loss  # K.maximum(kl_loss, self.kl_tolerance)
+        return K.maximum(kl_loss, self.kl_tolerance)
 
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(1000):
+        for i in range(200):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
             else:
                 batches = np.append(batches, b, axis = 0)
 
-        for i in range(50):
+        for i in range(10):
             a, b, c = self.x_valid.get_batch(i)
             if val_batches is None:
                 val_batches = b
@@ -190,12 +191,18 @@ class Compiler:
 
         batches, val_batches = self.set_batches()
 
+        inp = batches[:, 1:self.original_dim+1, :]
+        target = batches[:, :self.original_dim, :]
+
+        val_inp = val_batches[:, 1:self.original_dim+1, :]
+        val_target = val_batches[:, :self.original_dim, :]
+
         enc = np.zeros(shape = (batches.shape[0], 256))
         val_enc = np.zeros(shape = (val_batches.shape[0], 256))
 
-        self.vae.vae.fit(batches, [batches, enc],
+        self.vae.vae.fit(inp, [target, enc],
                          batch_size = self.batch_size, epochs = self.epochs,
-                         validation_data = (val_batches, [val_batches, val_enc]),
+                         validation_data = (val_inp, [val_target, val_enc]),
                          callbacks = [self.board])
         self.vae.encoder.save_weights("weights/vae_enc", True)
         self.vae.decoder.save_weights("weights/vae_dec", True)
