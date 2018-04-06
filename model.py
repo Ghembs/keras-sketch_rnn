@@ -57,17 +57,18 @@ class Vae:
         self.generate = generate
         self.max_len = max_len
         self.input = Input((max_len, 5,), name = "stroke_batch")
+        self.output = Input((max_len, 5,), name = "stroke_target")
 
         self.decoder = self.build_decoder()
 
         if not self.generate:
             self.encoder = self.build_encoder()
-            encoded = self.encoder(self.input)
+            encoded = self.encoder(self.output)
             self.mean = Lambda(lambda x: x[:, :128])(encoded)
             self.log_sigma = Lambda(lambda x: x[:, 128:])(encoded)
             self.z = Lambda(self.sampling)([self.mean, self.log_sigma])
             out = self.decoder([self.z, self.input])
-            self.vae = Model(self.input, [out, encoded])
+            self.vae = Model([self.output, self.input], [out, encoded])
 
             print(self.vae.summary())
 
@@ -75,11 +76,11 @@ class Vae:
         return K.tile(tensor, [1, self.max_len, 1])
 
     def build_encoder(self):
-        a = self.enc_1(self.input)
+        a = self.enc_1(self.output)
         mean = self.enc_mean(a)
         log_sigma = self.enc_log_sigma(a)
         out = concatenate([mean, log_sigma])
-        encoder = Model(self.input, out, name = 'encoder')
+        encoder = Model(self.output, out, name = 'encoder')
         return encoder
 
     def build_decoder(self):

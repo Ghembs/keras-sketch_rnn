@@ -114,11 +114,11 @@ class Compiler:
         for name in names:
             dataset = np.load("Dataset/" + name + ".full.npz", encoding = 'bytes')
             if self.x_train is None:
-                self.x_train = dataset["train"][:10000]
+                self.x_train = dataset["train"][:50000]
                 self.x_valid = dataset["valid"]
                 self.x_test = dataset["test"]
             else:
-                self.x_train = np.concatenate((self.x_train, dataset["train"][:10000]))
+                self.x_train = np.concatenate((self.x_train, dataset["train"][:50000]))
                 self.x_valid = np.concatenate((self.x_valid, dataset["valid"]))
                 self.x_test = np.concatenate((self.x_test, dataset["test"]))
 
@@ -153,14 +153,14 @@ class Compiler:
     def set_batches(self):
         batches = None
         val_batches = None
-        for i in range(200):
+        for i in range(1000):
             a, b, c = self.x_train.get_batch(i)
             if batches is None:
                 batches = b
             else:
                 batches = np.append(batches, b, axis = 0)
 
-        for i in range(10):
+        for i in range(50):
             a, b, c = self.x_valid.get_batch(i)
             if val_batches is None:
                 val_batches = b
@@ -200,9 +200,9 @@ class Compiler:
         enc = np.zeros(shape = (batches.shape[0], 256))
         val_enc = np.zeros(shape = (val_batches.shape[0], 256))
 
-        self.vae.vae.fit(inp, [target, enc],
+        self.vae.vae.fit([target, inp], [target, enc],
                          batch_size = self.batch_size, epochs = self.epochs,
-                         validation_data = (val_inp, [val_target, val_enc]),
+                         validation_data = ([val_target, val_inp], [val_target, val_enc]),
                          callbacks = [self.board])
         self.vae.encoder.save_weights("weights/vae_enc", True)
         self.vae.decoder.save_weights("weights/vae_dec", True)
@@ -218,28 +218,33 @@ class Compiler:
         for step in range(1000000):
             a, b, c = self.x_train.random_batch()
             a_, b_, c_ = self.x_valid.random_batch()
-            loss = self.vae.vae.train_on_batch(b, [b, np.zeros(shape=(100, 256))])
-            # loss = self.vae.vae.fit(b, [b, np.zeros(shape=(100, 256))], verbose = 0,
-            #                         batch_size = self.batch_size, epochs = 1,
-            #                         validation_data = (b_, [b_, np.zeros(shape=(100, 256))]))
+            # loss = self.vae.vae.train_on_batch(b, [b, np.zeros(shape=(100, 256))])
+            loss = self.vae.vae.fit([b[:, :self.original_dim, :], b[:, 1:self.original_dim+1, :]],
+                                    [b[:, :self.original_dim, :], np.zeros(shape=(100, 256))],
+                                    verbose = 0,
+                                    batch_size = self.batch_size, epochs = 1,
+                                    validation_data = ([b_[:, :self.original_dim, :],
+                                                        b_[:, 1:self.original_dim+1, :]],
+                                                       [b_[:, 1:self.original_dim+1, :],
+                                                        np.zeros(shape=(100, 256))]))
             if step % 20 == 0:
-                print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
-                      "kl_loss: {:.4f}, acc: {:.5f}, kl_acc: {:.5f}, lr: {:.5f}, kl_weight: "
-                      "{:.4f}".format(step, loss[0], loss[1], loss[2], loss[3], loss[4],
-                                      K.get_value(self.vae.vae.optimizer.lr),
-                                      self.vae.vae.loss_weights[1]))
                 # print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
-                #       "kl_loss: {:.4f}, acc: {:.5f}, val_loss: {:.5f}, "
-                #       "lr: {:.5f}, kl_weight: {:.4f}".format(step, loss.history['loss'][-1],
-                #                                              loss.history['decoder_loss'][-1],
-                #                                              loss.history['encoder_loss'][-1],
-                #                                              loss.history['decoder_acc'][-1],
-                #                                              loss.history['encoder_loss'][-1],
-                #                                              K.get_value(self.vae.vae.optimizer.lr),
-                #                                              self.vae.vae.loss_weights[1]))
+                #       "kl_loss: {:.4f}, acc: {:.5f}, kl_acc: {:.5f}, lr: {:.5f}, kl_weight: "
+                #       "{:.4f}".format(step, loss[0], loss[1], loss[2], loss[3], loss[4],
+                #                       K.get_value(self.vae.vae.optimizer.lr),
+                #                       self.vae.vae.loss_weights[1]))
+                print("Step: {:d}, total_loss: {:.5f}, rec_loss: {:.5f}, "
+                      "kl_loss: {:.4f}, acc: {:.5f}, val_loss: {:.5f}, "
+                      "lr: {:.5f}, kl_weight: {:.4f}".format(step, loss.history['loss'][-1],
+                                                             loss.history['decoder_loss'][-1],
+                                                             loss.history['encoder_loss'][-1],
+                                                             loss.history['decoder_acc'][-1],
+                                                             loss.history['encoder_loss'][-1],
+                                                             K.get_value(self.vae.vae.optimizer.lr),
+                                                             self.vae.vae.loss_weights[1]))
             if step % 500 == 0 and step > 0:
-                self.vae.encoder.save_weights("weights/vae_enc_" + str(step), True)
-                self.vae.decoder.save_weights("weights/vae_dec_" + str(step), True)
+                self.vae.encoder.save_weights("weights/vae_enc" + str(step), True)
+                self.vae.decoder.save_weights("weights/vae_dec" + str(step), True)
 
             curr_learning_rate = ((self.learning_rate - self.min_learning_rate) *
                                   (self.decay_rate) ** step + self.min_learning_rate)
@@ -352,7 +357,8 @@ def draw(generate = True):
         stroke = encoder.x_train.random_sample()
         stroke = dl.to_big_strokes(stroke)
         stroke = np.reshape(stroke, [1, stroke.shape[0], stroke.shape[1]])
-        z = K.eval(encoder.vae.sampling(encoder.vae.encoder.predict(stroke)))
+        enc = encoder.vae.encoder.predict(stroke)
+        z = K.eval(encoder.vae.sampling([enc[:, :128], enc[:, 128:]]))
 
     stroke_, m = sample(decoder.vae.decoder, 30, 1, False, z)
 
