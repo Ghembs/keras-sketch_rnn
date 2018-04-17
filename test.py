@@ -221,9 +221,12 @@ def conditional_generation(model, operation, temp, datasets, wrong = False):
             stroke = extract_stroke(model, datasets[1], wrong)
             z1 = model.encode(stroke, name = 'z1_sample.svg')
 
-            z0 = interpolation(z0, z1)
+            z0 = interpolation(z0, z1, n = 50)
 
-        model.draw_stroke_list(z0)
+            for i in range(len(z0)):
+                _ = model.decode(z0[i], temperature = temp, name = 'frame_' + str(i) + '.svg')
+
+        model.draw_stroke_list(z0, n = 50)
 
 
 def unconditional_generation(model, temp):
